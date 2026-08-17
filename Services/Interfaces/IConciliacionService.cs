@@ -13,5 +13,5 @@ public interface IConciliacionService
 
     EstadoConciliacionDto ObtenerEstado();
 
-    IReadOnlyList<ServidorDto> ObtenerServidores();
+    Task<IReadOnlyList<ServidorDto>> ObtenerServidoresAsync(CancellationToken cancellationToken = default);
 }

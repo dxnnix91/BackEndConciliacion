@@ -24,13 +24,16 @@ public class MongoService : IMongoService
     /// </summary>
     private static readonly TimeSpan OffsetEcuador = TimeSpan.FromHours(-5);
 
-    public MongoService(IOptions<MongoSettings> settings, IRestauranteCentralService restauranteCentralService, ILogger<MongoService> logger)
+    public MongoService(
+        IMongoClient client,
+        IOptions<MongoSettings> settings,
+        IRestauranteCentralService restauranteCentralService,
+        ILogger<MongoService> logger)
     {
         _restauranteCentralService = restauranteCentralService;
         _logger = logger;
 
         var mongoSettings = settings.Value;
-        var client = new MongoClient(mongoSettings.ConnectionString);
         var database = client.GetDatabase(mongoSettings.Database);
         _collection = database.GetCollection<MongoPayment>(mongoSettings.Collection);
     }
@@ -63,11 +66,10 @@ public class MongoService : IMongoService
         // Respaldo (sección nueva): cuando el externalReference viene incompleto o corrupto
         // (ej. "EC--34-..." con el local vacío, o "EC-null-32-..." con el local literalmente
         // como el texto "null"), no se puede determinar la tienda desde ahí. En esos casos se
-        // usa metadataCreatePayment.branchOffice, que corresponde exactamente al rst_id de la
-        // tabla Restaurante, y se consulta la base central de Azure (MAXPOINT) —que sí tiene
-        // TODAS las tiendas, a diferencia de la base individual de cada tienda— para recuperar
-        // el rst_cod_tienda real (ej. "K172"). Con eso la transacción se agrupa normalmente con
-        // el resto de su tienda en el resto del flujo, en vez de caer directo a
+        // usa metadataCreatePayment.branchOffice, que corresponde exactamente al restauranteId
+        // en la colección Mongo "connections", y se consulta ahí (ya no Azure/MAXPOINT) para
+        // recuperar el tiendaName real (ej. "K172"). Con eso la transacción se agrupa
+        // normalmente con el resto de su tienda en el resto del flujo, en vez de caer directo a
         // CONFIGURACION_NO_ENCONTRADA.
         var cacheRstIdACodigoTienda = new Dictionary<int, string?>();
 
@@ -93,7 +95,7 @@ public class MongoService : IMongoService
             if (!string.IsNullOrWhiteSpace(codigoTienda))
             {
                 _logger.LogInformation(
-                    "Local recuperado vía branchOffice/rst_id={RstId} -> {CodigoTienda} para externalReference='{ExternalReference}' (venía como local='{LocalOriginal}')",
+                    "Local recuperado vía branchOffice/restauranteId={RstId} -> {CodigoTienda} para externalReference='{ExternalReference}' (venía como local='{LocalOriginal}')",
                     rstId, codigoTienda, transaccion.ExternalReference, transaccion.Local);
                 transaccion.Local = codigoTienda;
             }

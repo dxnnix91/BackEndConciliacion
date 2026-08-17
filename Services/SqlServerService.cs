@@ -172,9 +172,22 @@ public class SqlServerService : ISqlServerService
 
     private string ConstruirConnectionString(ServerConfig servidor)
     {
+        // El documento de Mongo trae serverName/instanceName/port por separado; SqlClient
+        // espera todo junto en DataSource: "servidor\instancia,puerto" (instancia y puerto
+        // son opcionales según lo que traiga cada local).
+        var dataSource = servidor.Ip;
+        if (!string.IsNullOrWhiteSpace(servidor.InstanceName))
+        {
+            dataSource += $"\\{servidor.InstanceName}";
+        }
+        if (!string.IsNullOrWhiteSpace(servidor.Puerto))
+        {
+            dataSource += $",{servidor.Puerto}";
+        }
+
         var builder = new SqlConnectionStringBuilder
         {
-            DataSource = servidor.Ip,
+            DataSource = dataSource,
             InitialCatalog = servidor.Base,
             UserID = _settings.Username,
             Password = _settings.Password,

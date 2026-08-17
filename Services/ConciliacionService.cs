@@ -198,7 +198,7 @@ public class ConciliacionService : IConciliacionService
                 return;
             }
 
-            var servidor = _servidorService.BuscarPorLocal(local);
+            var servidor = await _servidorService.BuscarPorLocalAsync(local, cancellationToken);
             if (servidor is null)
             {
                 _logger.LogWarning("Local {Local} no tiene configuración de servidor válida (formato de local irreconocible)", local);
@@ -286,9 +286,11 @@ public class ConciliacionService : IConciliacionService
         }
     }
 
-    public IReadOnlyList<ServidorDto> ObtenerServidores()
+    public async Task<IReadOnlyList<ServidorDto>> ObtenerServidoresAsync(CancellationToken cancellationToken = default)
     {
-        return _servidorService.ObtenerServidores()
+        var servidores = await _servidorService.ObtenerServidoresAsync(cancellationToken);
+
+        return servidores
             .Select(s => new ServidorDto
             {
                 Local = s.Local,

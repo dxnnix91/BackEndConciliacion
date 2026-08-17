@@ -70,11 +70,14 @@ public class ConciliacionController : ControllerBase
         }
     }
 
-    /// <summary>Lista los locales configurados en el CSV, sin exponer credenciales (sección 25).</summary>
+    /// <summary>
+    /// Lista los locales configurados en la colección Mongo "connections", sin exponer
+    /// credenciales (sección 25).
+    /// </summary>
     [HttpGet("servidores")]
-    public ActionResult<IReadOnlyList<ServidorDto>> Servidores()
+    public async Task<ActionResult<IReadOnlyList<ServidorDto>>> Servidores(CancellationToken cancellationToken)
     {
-        return Ok(_conciliacionService.ObtenerServidores());
+        return Ok(await _conciliacionService.ObtenerServidoresAsync(cancellationToken));
     }
 
     /// <summary>

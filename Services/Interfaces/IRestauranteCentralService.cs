@@ -1,11 +1,16 @@
 ﻿namespace Backend.Services.Interfaces;
 
-/// <summary>Consulta la base central de Azure (MAXPOINT) que tiene todas las tiendas.</summary>
+/// <summary>
+/// Resuelve el código de tienda (tiendaName) a partir del restauranteId, usando la misma
+/// colección Mongo "connections" que IServidorService (ya no se consulta Azure SQL/MAXPOINT).
+/// Se usa como respaldo en MongoService cuando el externalReference no trae un local válido,
+/// pero sí viene metadataCreatePayment.branchOffice (que corresponde al restauranteId).
+/// </summary>
 public interface IRestauranteCentralService
 {
     /// <summary>
-    /// Devuelve el rst_cod_tienda (ej. "K172") correspondiente a un rst_id (branchOffice),
-    /// o null si no se encuentra o si la consulta falla.
+    /// Devuelve el tiendaName (ej. "K172") correspondiente a un restauranteId (branchOffice),
+    /// o null si no se encuentra ningún documento con ese restauranteId.
     /// </summary>
     Task<string?> ObtenerCodigoTiendaPorRstIdAsync(int rstId, CancellationToken cancellationToken = default);
 }
