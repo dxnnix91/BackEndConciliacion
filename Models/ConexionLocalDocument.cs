@@ -38,11 +38,19 @@ public class ConexionLocalDocument
     [BsonElement("instanceName")]
     public string InstanceName { get; set; } = string.Empty;
 
-    /// <summary>Puerto TCP de SQL Server. Viene como texto en Mongo (ej. "8433").</summary>
+    /// <summary>
+    /// Puerto TCP de SQL Server. En Mongo viene inconsistente entre documentos: a veces string
+    /// (ej. "8433"), a veces número (ej. 8433). FlexibleStringSerializer normaliza cualquiera de
+    /// los dos casos a string.
+    /// </summary>
     [BsonElement("port")]
+    [BsonSerializer(typeof(FlexibleStringSerializer))]
     public string Port { get; set; } = string.Empty;
 
-    /// <summary>Nombre de la base de datos en ese servidor.</summary>
+    /// <summary>
+    /// Nombre de base de datos tal como viene en Mongo. NO se usa para construir la conexión
+    /// (ver ServerConfig.Base): se deja mapeado solo por si sirve para diagnóstico/logging.
+    /// </summary>
     [BsonElement("databaseName")]
     public string DatabaseName { get; set; } = string.Empty;
 }

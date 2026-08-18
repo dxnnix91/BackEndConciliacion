@@ -10,7 +10,11 @@ public class ServerConfig
     /// <summary>Dirección IP o hostname del servidor SQL Server (serverName en Mongo).</summary>
     public string Ip { get; set; } = string.Empty;
 
-    /// <summary>Nombre de la base de datos en ese servidor (databaseName en Mongo).</summary>
+    /// <summary>
+    /// Nombre de la base de datos en ese servidor. Siempre se construye como "MAXPOINT_" +
+    /// Local (ej. "MAXPOINT_K039"); no se toma del campo databaseName de Mongo, que no es
+    /// confiable para esto.
+    /// </summary>
     public string Base { get; set; } = string.Empty;
 
     /// <summary>Código de local (tiendaName en Mongo, ej. "K004").</summary>

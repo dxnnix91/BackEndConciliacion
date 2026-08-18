@@ -10,6 +10,7 @@ var builder = WebApplication.CreateBuilder(args);
 builder.Services.Configure<MongoSettings>(builder.Configuration.GetSection(MongoSettings.SectionName));
 builder.Services.Configure<SqlServerSettings>(builder.Configuration.GetSection(SqlServerSettings.SectionName));
 builder.Services.Configure<ConexionesLocalesSettings>(builder.Configuration.GetSection(ConexionesLocalesSettings.SectionName));
+builder.Services.Configure<DomicilioSettings>(builder.Configuration.GetSection(DomicilioSettings.SectionName));
 
 // ---- Cliente Mongo compartido ----
 // Un solo IMongoClient (thread-safe, pensado para reutilizarse) para toda la app: lo usan tanto
@@ -36,6 +37,13 @@ builder.Services.AddSingleton<IRestauranteCentralService>(sp => sp.GetRequiredSe
 builder.Services.AddSingleton<IMongoService, MongoService>();
 builder.Services.AddSingleton<ISqlServerService, SqlServerService>();
 builder.Services.AddSingleton<IConciliacionService, ConciliacionService>();
+
+// ---- Conciliación de domicilios (colección "request_payments") ----
+// Reutiliza IServidorService/IRestauranteCentralService (misma colección "connections") y
+// ISqlServerService (misma conexión SQL, otro método de consulta) que la conciliación de
+// kiosko; solo cambian la fuente de Mongo y la lógica de clasificación.
+builder.Services.AddSingleton<IMongoDomicilioService, MongoDomicilioService>();
+builder.Services.AddSingleton<IConciliacionDomicilioService, ConciliacionDomicilioService>();
 
 builder.Services.AddControllers()
     .AddJsonOptions(options =>

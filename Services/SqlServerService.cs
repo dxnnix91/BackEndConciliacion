@@ -48,6 +48,31 @@ public class SqlServerService : ISqlServerService
     // lotes si un local tiene más códigos que esto en un mismo rango de fechas.
     private const int MaxCodigosPorConsulta = 2000;
 
+    // ============================================================================================
+    // Consulta para domicilios (dada explícitamente por el usuario): a diferencia de
+    // ConsultaBaseSinFiltroCodigos (kiosko), aquí NO se filtra por forma de pago (fp.fmp_descripcion),
+    // porque el sistema local a veces registra mal la forma de pago (ej. "EFECTIVO" en vez de
+    // "DE UNA") aunque el pago real haya sido por Deuna; esa clasificación se hace en C# en vez
+    // de en el SQL. Se agregan dos JOINs a [Status]: uno por el status de Formapago_Factura
+    // (sFormaPago) y otro por el status de la factura misma (sFactura, vía cf.IDStatus) — este
+    // último es el más importante: "Entregado" significa que el pedido fue cobrado y entregado
+    // al cliente. Como aquí solo se usa cf.* (no SELECT * de todas las tablas), no hay columnas
+    // duplicadas por nombre y no hace falta ningún alias especial para cfac_id.
+    // ============================================================================================
+    private const string ConsultaFacturasDomicilioSinFiltro = @"
+        SELECT
+            fp.fpf_codigo,
+            fp.fmp_descripcion,
+            sFormaPago.std_descripcion AS formapago_status,
+            sFactura.std_descripcion AS factura_status,
+            cf.*
+        FROM Cabecera_Factura AS cf
+        INNER JOIN Formapago_Factura AS fpf ON fpf.cfac_id = cf.cfac_id
+        INNER JOIN Formapago AS fp ON fp.IDFormapago = fpf.IDFormapago
+        INNER JOIN [Status] AS sFormaPago ON sFormaPago.IDStatus = fpf.IDStatus
+        INNER JOIN [Status] AS sFactura ON sFactura.IDStatus = cf.IDStatus
+        WHERE cf.cfac_id IN ({0})";
+
     public SqlServerService(IOptions<SqlServerSettings> settings, ILogger<SqlServerService> logger)
     {
         _settings = settings.Value;
@@ -143,6 +168,81 @@ public class SqlServerService : ISqlServerService
         _logger.LogInformation(
             "Servidor {Local} ({Ip}/{Base}): {Encontrados} de {Solicitados} códigos encontrados",
             servidor.Local, servidor.Ip, servidor.Base, resultado.Count, codigosValidos.Count);
+
+        return resultado;
+    }
+
+    public async Task<List<FacturaDomicilioSql>> ObtenerFacturasPorInvoiceIdsAsync(ServerConfig servidor, IReadOnlyList<string> invoiceIds, CancellationToken cancellationToken = default)
+    {
+        var resultado = new List<FacturaDomicilioSql>();
+
+        var idsValidos = invoiceIds.Where(c => !string.IsNullOrWhiteSpace(c)).Distinct().ToList();
+        if (idsValidos.Count == 0)
+        {
+            return resultado;
+        }
+
+        await using var connection = new SqlConnection(ConstruirConnectionString(servidor));
+        await connection.OpenAsync(cancellationToken);
+
+        foreach (var lote in Chunk(idsValidos, MaxCodigosPorConsulta))
+        {
+            var nombresParametros = new string[lote.Count];
+
+            await using var command = connection.CreateCommand();
+            command.CommandTimeout = _settings.CommandTimeoutSeconds;
+
+            for (var i = 0; i < lote.Count; i++)
+            {
+                var nombreParametro = $"@inv{i}";
+                nombresParametros[i] = nombreParametro;
+                command.Parameters.Add(new SqlParameter(nombreParametro, System.Data.SqlDbType.NVarChar, 200)
+                {
+                    Value = lote[i]
+                });
+            }
+
+            command.CommandText = string.Format(ConsultaFacturasDomicilioSinFiltro, string.Join(", ", nombresParametros));
+
+            await using var reader = await command.ExecuteReaderAsync(cancellationToken);
+
+            var ordCfacId = ObtenerOrdinalSeguro(reader, "cfac_id");
+            var ordRstId = ObtenerOrdinalSeguro(reader, "rst_id");
+            var ordCfacTotal = ObtenerOrdinalSeguro(reader, "cfac_total");
+            var ordFpfCodigo = ObtenerOrdinalSeguro(reader, "fpf_codigo");
+            var ordFmpDescripcion = ObtenerOrdinalSeguro(reader, "fmp_descripcion");
+            var ordFormaPagoStatus = ObtenerOrdinalSeguro(reader, "formapago_status");
+            var ordFacturaStatus = ObtenerOrdinalSeguro(reader, "factura_status");
+
+            while (await reader.ReadAsync(cancellationToken))
+            {
+                try
+                {
+                    resultado.Add(new FacturaDomicilioSql
+                    {
+                        CfacId = LeerString(reader, ordCfacId),
+                        RstId = LeerInt(reader, ordRstId, "rst_id"),
+                        CfacTotal = LeerDecimal(reader, ordCfacTotal, "cfac_total"),
+                        FpfCodigo = LeerString(reader, ordFpfCodigo),
+                        FormaPagoDescripcion = LeerString(reader, ordFmpDescripcion),
+                        FormaPagoStatus = LeerString(reader, ordFormaPagoStatus),
+                        FacturaStatus = LeerString(reader, ordFacturaStatus)
+                    });
+                }
+                catch (Exception ex)
+                {
+                    // Igual que en kiosko: una sola fila con un valor inesperado no debe tirar
+                    // abajo todo el lote de este servidor.
+                    _logger.LogWarning(ex,
+                        "Servidor {Local} ({Ip}/{Base}): se descartó una fila de factura de domicilio por un valor con formato inesperado (cfac_id='{CfacId}')",
+                        servidor.Local, servidor.Ip, servidor.Base, LeerString(reader, ordCfacId));
+                }
+            }
+        }
+
+        _logger.LogInformation(
+            "Servidor {Local} ({Ip}/{Base}): {Encontradas} de {Solicitadas} facturas de domicilio encontradas",
+            servidor.Local, servidor.Ip, servidor.Base, resultado.Count, idsValidos.Count);
 
         return resultado;
     }

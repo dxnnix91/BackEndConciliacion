@@ -22,6 +22,15 @@ public interface ISqlServerService
     /// </summary>
     Task<List<SqlPayment>> ObtenerPagosPorCodigosAsync(ServerConfig servidor, IReadOnlyList<string> codigosApp, CancellationToken cancellationToken = default);
 
+    /// <summary>
+    /// Se conecta al servidor indicado y devuelve, mapeadas a FacturaDomicilioSql, las facturas
+    /// (Cabecera_Factura) cuyo cfac_id esté en <paramref name="invoiceIds"/> (los invoiceId de
+    /// Mongo para pedidos a domicilio). A diferencia de ObtenerPagosPorCodigosAsync, NO filtra
+    /// por forma de pago: trae la factura sin importar cómo quedó registrada, porque el sistema
+    /// local a veces la asigna mal.
+    /// </summary>
+    Task<List<FacturaDomicilioSql>> ObtenerFacturasPorInvoiceIdsAsync(ServerConfig servidor, IReadOnlyList<string> invoiceIds, CancellationToken cancellationToken = default);
+
     /// <summary>Prueba de conexión simple, usada por GET /api/conciliacion/servidores.</summary>
     Task<bool> ProbarConexionAsync(ServerConfig servidor, CancellationToken cancellationToken = default);
 }

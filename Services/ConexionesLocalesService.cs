@@ -165,11 +165,18 @@ public class ConexionesLocalesService : IServidorService, IRestauranteCentralSer
         }
     }
 
+    /// <summary>
+    /// La base de datos SQL Server sigue el patrón fijo "MAXPOINT_" + tiendaName (ej. "K039" ->
+    /// "MAXPOINT_K039"). El campo "databaseName" del documento de Mongo NO es confiable para
+    /// esto (a veces trae valores incorrectos, ej. "MAXPOINT_K043_DT" en vez de
+    /// "MAXPOINT_K043"), así que se ignora deliberadamente y se construye siempre a partir de
+    /// tiendaName, que sí es confiable.
+    /// </summary>
     private static ServerConfig MapearServerConfig(ConexionLocalDocument documento) => new()
     {
         Local = documento.TiendaName,
         Ip = documento.ServerName,
-        Base = documento.DatabaseName,
+        Base = $"MAXPOINT_{documento.TiendaName}",
         Puerto = documento.Port,
         InstanceName = documento.InstanceName
     };
