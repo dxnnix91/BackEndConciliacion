@@ -381,7 +381,12 @@ public class ConciliacionService : IConciliacionService
             Local = local,
             BranchOffice = mongo.MetadataCreatePayment?.BranchOffice ?? string.Empty,
             ExternalReference = mongo.ExternalReference,
-            CodigoApp = null,
+            // No hay fila en SQL Server para este pago, así que no existe un codigo_app "real"
+            // que devolver. Aun así se muestra el externalReference de Mongo (que es el código
+            // que se buscó y no se encontró) en vez de null, para que la columna "Código App"
+            // no quede vacía en el front / export: sección 16, feedback de que el campo se veía
+            // en blanco para el caso "Pago aprobado sin factura".
+            CodigoApp = mongo.ExternalReference,
             Estado = EstadoConciliacion.FALTA_SQL,
             MongoStatus = mongo.Status,
             MongoAmount = ConvertirCentavos(mongo.Amount),
@@ -420,7 +425,9 @@ public class ConciliacionService : IConciliacionService
             Local = local,
             BranchOffice = mongo.MetadataCreatePayment?.BranchOffice ?? string.Empty,
             ExternalReference = mongo.ExternalReference,
-            CodigoApp = null,
+            // Igual que en ConstruirResultadoFaltaSql: no se llegó a consultar SQL, pero se
+            // muestra el externalReference en vez de dejar el campo en blanco.
+            CodigoApp = mongo.ExternalReference,
             Estado = EstadoConciliacion.CONFIGURACION_NO_ENCONTRADA,
             MongoStatus = mongo.Status,
             MongoAmount = ConvertirCentavos(mongo.Amount),
@@ -436,7 +443,9 @@ public class ConciliacionService : IConciliacionService
             Local = local,
             BranchOffice = mongo.MetadataCreatePayment?.BranchOffice ?? string.Empty,
             ExternalReference = mongo.ExternalReference,
-            CodigoApp = null,
+            // Igual que en ConstruirResultadoFaltaSql: hubo un error consultando SQL, pero se
+            // muestra el externalReference en vez de dejar el campo en blanco.
+            CodigoApp = mongo.ExternalReference,
             Estado = estado,
             MongoStatus = mongo.Status,
             MongoAmount = ConvertirCentavos(mongo.Amount),
