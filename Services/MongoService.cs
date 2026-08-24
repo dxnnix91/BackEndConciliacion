@@ -38,7 +38,19 @@ public class MongoService : IMongoService
         _collection = database.GetCollection<MongoPayment>(mongoSettings.Collection);
     }
 
-    public async Task<List<MongoPayment>> ObtenerTransaccionesAprobadasAsync(DateOnly fechaInicio, DateOnly fechaFin, CancellationToken cancellationToken = default)
+    public Task<List<MongoPayment>> ObtenerTransaccionesAprobadasAsync(DateOnly fechaInicio, DateOnly fechaFin, CancellationToken cancellationToken = default)
+        => ObtenerTransaccionesPorStatusAsync("approved", fechaInicio, fechaFin, cancellationToken);
+
+    /// <summary>
+    /// Igual que ObtenerTransaccionesAprobadasAsync pero filtrando por "cancelled" en vez de
+    /// "approved" (sección nueva: detectar pagos cancelados en Mongo que sí se facturaron y
+    /// entregaron en SQL Server). Comparte toda la lógica de rango de fechas y de respaldo de
+    /// local por branchOffice con el método de aprobados.
+    /// </summary>
+    public Task<List<MongoPayment>> ObtenerTransaccionesCanceladasAsync(DateOnly fechaInicio, DateOnly fechaFin, CancellationToken cancellationToken = default)
+        => ObtenerTransaccionesPorStatusAsync("cancelled", fechaInicio, fechaFin, cancellationToken);
+
+    private async Task<List<MongoPayment>> ObtenerTransaccionesPorStatusAsync(string status, DateOnly fechaInicio, DateOnly fechaFin, CancellationToken cancellationToken = default)
     {
         // Rango [inicio de fechaInicio, inicio del día siguiente a fechaFin) según el día
         // calendario de Ecuador, convertido a UTC para poder comparar contra createdAt
@@ -48,11 +60,11 @@ public class MongoService : IMongoService
         var finExclusivo = new DateTimeOffset(fechaFin.ToDateTime(TimeOnly.MinValue), OffsetEcuador).UtcDateTime.AddDays(1);
 
         _logger.LogInformation(
-            "Consultando MongoDB: status=approved, createdAt >= {Inicio} y < {Fin}",
-            inicio, finExclusivo);
+            "Consultando MongoDB: status={Status}, createdAt >= {Inicio} y < {Fin}",
+            status, inicio, finExclusivo);
 
         var filtro = Builders<MongoPayment>.Filter.And(
-            Builders<MongoPayment>.Filter.Eq(p => p.Status, "approved"),
+            Builders<MongoPayment>.Filter.Eq(p => p.Status, status),
             Builders<MongoPayment>.Filter.Gte(p => p.CreatedAt, inicio),
             Builders<MongoPayment>.Filter.Lt(p => p.CreatedAt, finExclusivo));
 
@@ -102,8 +114,8 @@ public class MongoService : IMongoService
         }
 
         _logger.LogInformation(
-            "MongoDB devolvió {Cantidad} transacciones aprobadas entre {FechaInicio} y {FechaFin}",
-            transacciones.Count, fechaInicio, fechaFin);
+            "MongoDB devolvió {Cantidad} transacciones con status={Status} entre {FechaInicio} y {FechaFin}",
+            transacciones.Count, status, fechaInicio, fechaFin);
 
         return transacciones;
     }

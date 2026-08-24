@@ -9,7 +9,15 @@ public enum EstadoConciliacion
     DIFERENCIA_MONTO,
     ERROR_CONEXION,
     ERROR_SQL,
-    CONFIGURACION_NO_ENCONTRADA
+    CONFIGURACION_NO_ENCONTRADA,
+
+    /// <summary>
+    /// El pago quedó "cancelled" en MongoDB, pero en SQL Server sí existe una factura generada,
+    /// entregada ("Entregado"/"Entregada") y pagada como "DE UNA" para ese mismo codigo_app: se
+    /// cobró y entregó el pedido pese a que en Mongo el pago aparece cancelado. Mismo concepto
+    /// que FACTURA_CON_PAGO_CANCELADO en la conciliación de domicilios.
+    /// </summary>
+    FACTURA_CON_PAGO_CANCELADO
 }
 
 /// <summary>Estado general de ejecución de una conciliación (para GET /estado).</summary>

@@ -31,6 +31,15 @@ public interface ISqlServerService
     /// </summary>
     Task<List<FacturaDomicilioSql>> ObtenerFacturasPorInvoiceIdsAsync(ServerConfig servidor, IReadOnlyList<string> invoiceIds, CancellationToken cancellationToken = default);
 
+    /// <summary>
+    /// Se conecta al servidor indicado y devuelve, mapeadas a FacturaKioskoCanceladaSql, las
+    /// facturas cuyo codigo_app esté en <paramref name="codigosApp"/> (los externalReference de
+    /// pagos "cancelled" en Mongo para kiosko). A diferencia de ObtenerPagosPorCodigosAsync, NO
+    /// filtra por forma de pago en el WHERE: se usa para detectar pagos cancelados en Mongo que
+    /// sí tienen una factura entregada en SQL Server.
+    /// </summary>
+    Task<List<FacturaKioskoCanceladaSql>> ObtenerFacturasCanceladasPorCodigosAsync(ServerConfig servidor, IReadOnlyList<string> codigosApp, CancellationToken cancellationToken = default);
+
     /// <summary>Prueba de conexión simple, usada por GET /api/conciliacion/servidores.</summary>
     Task<bool> ProbarConexionAsync(ServerConfig servidor, CancellationToken cancellationToken = default);
 }

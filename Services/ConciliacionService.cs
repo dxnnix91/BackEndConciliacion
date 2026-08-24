@@ -99,6 +99,15 @@ public class ConciliacionService : IConciliacionService
             var transaccionesMongo = await _mongoService.ObtenerTransaccionesAprobadasAsync(fechaInicio, fechaFin, cancellationToken);
             var grupos = transaccionesMongo.GroupBy(t => t.Local).ToList();
 
+            // Pagos "cancelled" en Mongo (sección nueva): se revisan aparte, contra una consulta
+            // SQL distinta a la validada de arriba, para detectar el caso "se canceló en la app
+            // pero sí se facturó y entregó en la tienda". No participan de _transaccionesTotal /
+            // _localesTotal ni de ActualizarProgresoLocal a propósito: es una verificación
+            // adicional sobre el flujo principal de aprobados, no debe alterar cómo se ve su
+            // progreso en GET /api/conciliacion/estado.
+            var transaccionesCanceladas = await _mongoService.ObtenerTransaccionesCanceladasAsync(fechaInicio, fechaFin, cancellationToken);
+            var gruposCancelados = transaccionesCanceladas.GroupBy(t => t.Local).ToList();
+
             lock (_lock)
             {
                 _transaccionesTotal = transaccionesMongo.Count;
@@ -106,6 +115,7 @@ public class ConciliacionService : IConciliacionService
             }
 
             _logger.LogInformation("Locales encontrados en Mongo: {Cantidad}", grupos.Count);
+            _logger.LogInformation("Locales con pagos cancelados a revisar: {Cantidad}", gruposCancelados.Count);
 
             // Grado máximo de locales procesándose al mismo tiempo (Locales/SqlServer:MaxGradoParalelismo).
             // Cada local abre su propia conexión SQL independiente; un local lento, caído o con
@@ -122,6 +132,13 @@ public class ConciliacionService : IConciliacionService
                     resultados,
                     valorSqlAcumulado => Interlocked.Add(ref totalSqlAcumulado, valorSqlAcumulado),
                     ct));
+
+            // Segunda pasada, independiente de la de aprobados: revisa los pagos cancelados de
+            // cada local contra la consulta SQL nueva (sin filtro de forma de pago).
+            await Parallel.ForEachAsync(
+                gruposCancelados,
+                new ParallelOptions { MaxDegreeOfParallelism = maxGradoParalelismo, CancellationToken = cancellationToken },
+                async (grupo, ct) => await ProcesarLocalCanceladosAsync(grupo.Key, grupo.ToList(), resultados, ct));
 
             var resultadosFinales = resultados.ToList();
             var resumen = ConstruirResumen(fechaInicio, fechaFin, transaccionesMongo.Count, totalSqlAcumulado, grupos.Count, resultadosFinales);
@@ -265,6 +282,112 @@ public class ConciliacionService : IConciliacionService
         }
     }
 
+    /// <summary>
+    /// Revisa los pagos "cancelled" en Mongo de un local: busca en SQL Server (consulta nueva,
+    /// sin filtro de forma de pago) si existe una factura para cada codigo_app y, si la hay,
+    /// decide si es una alerta real (entregada y pagada como "DE UNA") o un caso consistente que
+    /// se omite del reporte (sin factura, factura no entregada, o pagada por otro medio en la
+    /// tienda). A diferencia de ProcesarLocalAsync, un error aquí solo se registra en el log: no
+    /// genera resultados de error, para no inflar los contadores del flujo principal por una
+    /// verificación adicional.
+    /// </summary>
+    private async Task ProcesarLocalCanceladosAsync(
+        string local,
+        List<MongoPayment> canceladosDelLocal,
+        ConcurrentQueue<ConciliacionResult> resultados,
+        CancellationToken cancellationToken)
+    {
+        if (string.IsNullOrWhiteSpace(local))
+        {
+            return;
+        }
+
+        try
+        {
+            var servidor = await _servidorService.BuscarPorLocalAsync(local, cancellationToken);
+            if (servidor is null)
+            {
+                _logger.LogWarning("Local {Local} no tiene configuración de servidor válida al revisar pagos cancelados", local);
+                return;
+            }
+
+            var codigosApp = canceladosDelLocal
+                .Select(t => t.ExternalReference)
+                .Where(c => !string.IsNullOrWhiteSpace(c))
+                .Distinct()
+                .ToList();
+
+            var facturas = await _sqlServerService.ObtenerFacturasCanceladasPorCodigosAsync(servidor, codigosApp, cancellationToken);
+
+            var facturasPorCodigo = new Dictionary<string, FacturaKioskoCanceladaSql>(StringComparer.OrdinalIgnoreCase);
+            foreach (var factura in facturas)
+            {
+                if (!string.IsNullOrWhiteSpace(factura.CodigoApp) && !facturasPorCodigo.ContainsKey(factura.CodigoApp))
+                {
+                    facturasPorCodigo[factura.CodigoApp] = factura;
+                }
+            }
+
+            foreach (var transaccion in canceladosDelLocal)
+            {
+                if (!facturasPorCodigo.TryGetValue(transaccion.ExternalReference, out var factura))
+                {
+                    // Cancelado y sin ninguna factura en SQL: consistente, se omite del reporte.
+                    continue;
+                }
+
+                if (string.IsNullOrWhiteSpace(factura.FacturaStatus) || !EstadosFacturaEntregada.Contains(factura.FacturaStatus))
+                {
+                    // Hay factura pero no está entregada (anulada, pendiente, etc.): no es la
+                    // alerta buscada, se omite.
+                    continue;
+                }
+
+                if (!string.Equals(factura.FormaPagoDescripcion, FormaPagoEsperadaDeUna, StringComparison.OrdinalIgnoreCase))
+                {
+                    // Se cobró por otro medio en la tienda (efectivo, tarjeta, etc.), sin relación
+                    // con el pago cancelado en la app: consistente, se omite.
+                    continue;
+                }
+
+                resultados.Enqueue(ConstruirResultadoFacturaConPagoCancelado(transaccion, factura, local));
+            }
+        }
+        catch (Exception ex)
+        {
+            _logger.LogError(ex, "Error revisando pagos cancelados del local {Local}", local);
+        }
+    }
+
+    // Estados de factura que cuentan como "entregada" (ver comentario equivalente en
+    // ConciliacionDomicilioService: la base a veces guarda "Entregada", no "Entregado").
+    private static readonly HashSet<string> EstadosFacturaEntregada = new(StringComparer.OrdinalIgnoreCase)
+    {
+        "Entregado",
+        "Entregada"
+    };
+
+    private const string FormaPagoEsperadaDeUna = "DE UNA";
+
+    private static ConciliacionResult ConstruirResultadoFacturaConPagoCancelado(MongoPayment mongo, FacturaKioskoCanceladaSql factura, string local)
+    {
+        return new ConciliacionResult
+        {
+            Local = local,
+            BranchOffice = mongo.MetadataCreatePayment?.BranchOffice ?? string.Empty,
+            ExternalReference = mongo.ExternalReference,
+            CodigoApp = factura.CodigoApp,
+            Estado = EstadoConciliacion.FACTURA_CON_PAGO_CANCELADO,
+            MongoStatus = mongo.Status,
+            MongoAmount = ConvertirCentavos(mongo.Amount),
+            MongoOrderDetailTotal = ConvertirCentavos(mongo.OrderDetail?.Price?.Total),
+            SqlAmount = factura.CfacTotal,
+            CfacId = factura.CfacId,
+            FechaMongo = mongo.CreatedAt,
+            Mensaje = $"Pago cancelado en MongoDB, pero existe una factura entregada en SQL Server (cfac_id='{factura.CfacId}', estado='{factura.FacturaStatus}') pagada como 'DE UNA'."
+        };
+    }
+
     public EstadoConciliacionDto ObtenerEstado()
     {
         lock (_lock)
@@ -337,6 +460,7 @@ public class ConciliacionService : IConciliacionService
             ErroresConexion = resultados.Count(r => r.Estado == EstadoConciliacion.ERROR_CONEXION),
             ErroresSql = resultados.Count(r => r.Estado == EstadoConciliacion.ERROR_SQL),
             ConfiguracionNoEncontrada = resultados.Count(r => r.Estado == EstadoConciliacion.CONFIGURACION_NO_ENCONTRADA),
+            FacturaConPagoCancelado = resultados.Count(r => r.Estado == EstadoConciliacion.FACTURA_CON_PAGO_CANCELADO),
             LocalesProcesados = localesProcesados
         };
     }

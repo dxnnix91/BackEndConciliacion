@@ -14,5 +14,12 @@ public class ConciliacionResumen
     public int ErroresConexion { get; set; }
     public int ErroresSql { get; set; }
     public int ConfiguracionNoEncontrada { get; set; }
+
+    /// <summary>
+    /// Pagos "cancelled" en MongoDB para los que sí se encontró una factura entregada y pagada
+    /// como "DE UNA" en SQL Server (mismo concepto que en el resumen de domicilios).
+    /// </summary>
+    public int FacturaConPagoCancelado { get; set; }
+
     public int LocalesProcesados { get; set; }
 }

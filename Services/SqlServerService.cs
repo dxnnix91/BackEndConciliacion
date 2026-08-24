@@ -73,6 +73,34 @@ public class SqlServerService : ISqlServerService
         INNER JOIN [Status] AS sFactura ON sFactura.IDStatus = cf.IDStatus
         WHERE cf.cfac_id IN ({0})";
 
+    // ============================================================================================
+    // NUEVA CONSULTA (no reemplaza ni toca ConsultaBaseSinFiltroCodigos de arriba): se usa
+    // exclusivamente para revisar pagos "cancelled" en Mongo y ver si, pese a eso, sí existe una
+    // factura generada en SQL Server para ese mismo codigo_app. A propósito NO filtra por
+    // fp.fmp_descripcion = 'DE UNA' en el WHERE (esa decisión se toma después, en C#, una vez
+    // leído el estado real de la factura) — mismo criterio que ya se usa en
+    // ConsultaFacturasDomicilioSinFiltro. Se agrega el JOIN a [Status] para leer si la factura
+    // quedó "Entregada"/"Entregado".
+    // ============================================================================================
+    private const string ConsultaFacturaCanceladaKiosko = @"
+        SELECT
+            kcp.codigo_app,
+            cf.cfac_id AS cfac_id_factura,
+            cf.rst_id,
+            cf.cfac_total,
+            fp.fmp_descripcion,
+            sFactura.std_descripcion AS factura_status
+        FROM kiosko_cabecera_pedidos AS kcp
+        INNER JOIN Cabecera_Factura AS cf
+            ON cf.cfac_id = kcp.cfac_id
+        INNER JOIN Formapago_Factura AS fpf
+            ON fpf.cfac_id = cf.cfac_id
+        INNER JOIN Formapago AS fp
+            ON fp.IDFormapago = fpf.IDFormapago
+        INNER JOIN [Status] AS sFactura
+            ON sFactura.IDStatus = cf.IDStatus
+        WHERE kcp.codigo_app IN ({0})";
+
     public SqlServerService(IOptions<SqlServerSettings> settings, ILogger<SqlServerService> logger)
     {
         _settings = settings.Value;
@@ -243,6 +271,79 @@ public class SqlServerService : ISqlServerService
         _logger.LogInformation(
             "Servidor {Local} ({Ip}/{Base}): {Encontradas} de {Solicitadas} facturas de domicilio encontradas",
             servidor.Local, servidor.Ip, servidor.Base, resultado.Count, idsValidos.Count);
+
+        return resultado;
+    }
+
+    public async Task<List<FacturaKioskoCanceladaSql>> ObtenerFacturasCanceladasPorCodigosAsync(ServerConfig servidor, IReadOnlyList<string> codigosApp, CancellationToken cancellationToken = default)
+    {
+        var resultado = new List<FacturaKioskoCanceladaSql>();
+
+        var codigosValidos = codigosApp.Where(c => !string.IsNullOrWhiteSpace(c)).Distinct().ToList();
+        if (codigosValidos.Count == 0)
+        {
+            return resultado;
+        }
+
+        await using var connection = new SqlConnection(ConstruirConnectionString(servidor));
+        await connection.OpenAsync(cancellationToken);
+
+        foreach (var lote in Chunk(codigosValidos, MaxCodigosPorConsulta))
+        {
+            var nombresParametros = new string[lote.Count];
+
+            await using var command = connection.CreateCommand();
+            command.CommandTimeout = _settings.CommandTimeoutSeconds;
+
+            for (var i = 0; i < lote.Count; i++)
+            {
+                var nombreParametro = $"@cancod{i}";
+                nombresParametros[i] = nombreParametro;
+                command.Parameters.Add(new SqlParameter(nombreParametro, System.Data.SqlDbType.NVarChar, 200)
+                {
+                    Value = lote[i]
+                });
+            }
+
+            command.CommandText = string.Format(ConsultaFacturaCanceladaKiosko, string.Join(", ", nombresParametros));
+
+            await using var reader = await command.ExecuteReaderAsync(cancellationToken);
+
+            var ordCodigoApp = ObtenerOrdinalSeguro(reader, "codigo_app");
+            var ordRstId = ObtenerOrdinalSeguro(reader, "rst_id");
+            var ordCfacId = ObtenerOrdinalSeguro(reader, "cfac_id_factura");
+            var ordCfacTotal = ObtenerOrdinalSeguro(reader, "cfac_total");
+            var ordFmpDescripcion = ObtenerOrdinalSeguro(reader, "fmp_descripcion");
+            var ordFacturaStatus = ObtenerOrdinalSeguro(reader, "factura_status");
+
+            while (await reader.ReadAsync(cancellationToken))
+            {
+                try
+                {
+                    resultado.Add(new FacturaKioskoCanceladaSql
+                    {
+                        CodigoApp = LeerString(reader, ordCodigoApp),
+                        RstId = LeerInt(reader, ordRstId, "rst_id"),
+                        CfacId = LeerString(reader, ordCfacId),
+                        CfacTotal = LeerDecimal(reader, ordCfacTotal, "cfac_total"),
+                        FormaPagoDescripcion = LeerString(reader, ordFmpDescripcion),
+                        FacturaStatus = LeerString(reader, ordFacturaStatus)
+                    });
+                }
+                catch (Exception ex)
+                {
+                    // Misma tolerancia a filas puntuales con formato inesperado que en los demás
+                    // métodos de este servicio: se descarta la fila, se registra, y se sigue.
+                    _logger.LogWarning(ex,
+                        "Servidor {Local} ({Ip}/{Base}): se descartó una fila al revisar pagos cancelados por un valor con formato inesperado (codigo_app='{CodigoApp}')",
+                        servidor.Local, servidor.Ip, servidor.Base, LeerString(reader, ordCodigoApp));
+                }
+            }
+        }
+
+        _logger.LogInformation(
+            "Servidor {Local} ({Ip}/{Base}): {Encontrados} de {Solicitados} códigos cancelados con factura en SQL",
+            servidor.Local, servidor.Ip, servidor.Base, resultado.Count, codigosValidos.Count);
 
         return resultado;
     }
